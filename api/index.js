@@ -23,17 +23,25 @@ const STRIP_HEADERS = new Set([
 
 async function relay(req) {
   if (!TARGET_BASE) {
-    return new Response("What the fuck: ME_TAR", { status: 500 });
+    return new Response("Configuration Error: ME_TAR environment variable is missing.", { status: 500 });
   }
 
   try {
     const url = new URL(req.url);
-    const targetUrl = TARGET_BASE + url.pathname + url.search;
+    
+    // THE FIX: Clean the path before sending it to the VPS
+    let cleanPath = url.pathname;
+    if (cleanPath.startsWith('/api')) {
+      // Remove '/api' so /api/netme becomes /netme
+      cleanPath = cleanPath.substring(4); 
+    }
+    if (!cleanPath) cleanPath = '/';
+
+    const targetUrl = TARGET_BASE + cleanPath + url.search;
 
     const outHeaders = new Headers();
     let clientIp = null;
 
-    // Filter and copy headers
     for (const [key, val] of req.headers) {
       const k = key.toLowerCase();
       if (STRIP_HEADERS.has(k)) continue;
@@ -54,11 +62,9 @@ async function relay(req) {
       method,
       headers: outHeaders,
       redirect: "manual",
-      // 'duplex: half' is mandatory for Edge Web Streams with request bodies
       ...(hasBody && { body: req.body, duplex: "half" }),
     };
 
-    // Forward the request to your X-UI VPS
     const upstream = await fetch(targetUrl, fetchOpts);
 
     const resHeaders = new Headers();
@@ -67,7 +73,6 @@ async function relay(req) {
       resHeaders.set(k, v);
     }
 
-    // Stream the body straight through to the client
     return new Response(upstream.body, {
       status: upstream.status,
       headers: resHeaders,
@@ -75,11 +80,10 @@ async function relay(req) {
     
   } catch (err) {
     console.error("Relay error:", err);
-    return new Response("shit went bad: failed", { status: 502 });
+    return new Response("Bad Gateway: Upstream connection failed.", { status: 502 });
   }
 }
 
-// Explicitly export all necessary methods for XHTTP and pre-flight checks
 export async function GET(req)     { return relay(req); }
 export async function POST(req)    { return relay(req); }
 export async function PUT(req)     { return relay(req); }
